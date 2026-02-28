@@ -1,0 +1,26 @@
+name: Run LoL Bot
+on:
+  schedule:
+    - cron: '0 */5 * * *' # 5시간마다 자동 재실행
+  workflow_dispatch:      # 수동 실행 버튼 생성
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install discord.py aiohttp
+
+      - name: Run Bot
+        env:
+          TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          RIOT_KEY: ${{ secrets.RIOT_KEY }}
+        run: python bot.py
