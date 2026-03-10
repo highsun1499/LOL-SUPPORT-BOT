@@ -6,7 +6,7 @@ import traceback
 
 # ================= [ 설정 구역 ] =================
 # 본인의 정보로 변경하세요.
-RIOT_API_KEY = "RGAPI-ed4ae3f2-5a6c-4df1-98a4-46f9ea574660"
+RIOT_API_KEY = "RGAPI-f2d86ffb-3f7b-4889-a3de-0efcb980373e"
 TOKEN = "MTQ3NzMxOTM1Mzk4Nzg5MTI5MQ.G4XOrk.ABQyHXYKKqVor70D6GgzoviqI_OS2HdCVMV1IU"
 
 # 티어 목록 (기존 역할 제거 및 대조용)
