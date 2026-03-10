@@ -1,8 +1,8 @@
 name: Run LoL Bot
 on:
   schedule:
-    - cron: '0 */5 * * *' # 5시간마다 자동 재실행
-  workflow_dispatch:      # 수동 실행 버튼 생성
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -21,6 +21,8 @@ jobs:
 
       - name: Run Bot
         env:
+          # 봇 코드(bot.py)에서 os.getenv("DISCORD_TOKEN")로 부르고 있으므로 왼쪽 이름이 같아야 함
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          # 봇 코드(bot.py)에서 os.getenv("RIOT_API_KEY")로 부르고 있으므로 왼쪽 이름이 같아야 함
           RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
         run: python bot.py
