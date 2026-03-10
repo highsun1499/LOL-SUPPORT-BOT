@@ -82,14 +82,14 @@ async def fetch_and_post_news():
                         embed = discord.Embed(
                             title=clean_title, # 제목을 클릭하면 링크로 이동하게 됨
                             url=link,
-                            description="공식 홈페이시 새 소식",
+                            description="리그 오브 레전드 공식 홈페이지 새 소식",
                             color=0x00FF99
                         )
-                        embed.set_footer(text="League of Legends News")
+                        embed.set_footer(text="https://www.leagueoflegends.com/ko-kr/news/")
                         
                         # [선택] 만약 RSS에 이미지가 있다면 썸네일로 추가 가능
-                        # if item.find('media:content'):
-                        #    embed.set_image(url=item.find('media:content')['url'])
+                        if item.find('media:content'):
+                            embed.set_image(url=item.find('media:content')['url'])
 
                         await channel.send(embed=embed)
                         new_count += 1
