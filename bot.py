@@ -1,19 +1,19 @@
 import discord
-from discord.ext import commands, tasks  # 쉼표 추가 및 tasks 임포트
+from discord.ext import commands, tasks
 import aiohttp
 from bs4 import BeautifulSoup
 import random
 import traceback
 import os
+import asyncio
 
 # ================= [ 설정 구역 ] =================
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# 📢 [필독] 새소식을 보낼 채널 ID를 여기에 넣으세요 (숫자만)
+# 📢 새소식을 보낼 채널 ID (반드시 본인 서버의 채널 ID로 수정)
 NEWS_CHANNEL_ID = 1480944831600656384
 
-# 티어 목록 및 색상
 TIER_DATA = {
     "Challenger": 0xf4c874, "Grandmaster": 0xc64444, "Master": 0x9d5ca3,
     "Diamond": 0x576bce, "Emerald": 0x2da161, "Platinum": 0x4e9996,
@@ -23,51 +23,56 @@ TIER_DATA = {
 TIER_LIST = list(TIER_DATA.keys())
 # ===============================================
 
-intents = discord.Intents.all()
+# [개선] Intents를 필요한 것만 켜서 봇의 부하를 줄입니다.
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True 
+
 bot = commands.Bot(command_prefix='!', intents=intents)
 pending_users = {}
 
 # --- [ 신규 기능: 롤 새소식 크롤링 루프 ] ---
 @tasks.loop(minutes=60)
 async def check_lol_news():
+    print("--- [로그] 뉴스 체크 루프 시작 ---")
     url = "https://www.leagueoflegends.com/ko-kr/news/latest/"
     
     async with aiohttp.ClientSession() as session:
         try:
+            # fetch_channel을 사용하여 채널 정보를 강제로 새로고침합니다.
+            channel = await bot.fetch_channel(NEWS_CHANNEL_ID)
+            
             async with session.get(url) as response:
                 if response.status == 200:
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # 1. 홈페이지에서 최신 뉴스 10개 가져오기
+                    # 뉴스 카드 추출
                     articles = soup.select('a[data-testid^="article-card-"]')[:10]
-                    articles.reverse() # 과거순 정렬
+                    articles.reverse() 
                     
-                    try:
-                        channel = await bot.fetch_channel(NEWS_CHANNEL_ID)
-                    except Exception as e:
-                        print(f"--- [로그] 채널을 페치하는 중 오류 발생: {e} ---")
-                        return
-
-                    # 2. [중복 감지 핵심] 채널의 최근 메시지 100개를 가져와서 제목들만 추출
+                    # 채널 히스토리에서 이미 올린 뉴스 제목들 수집
                     already_posted_titles = []
-                    async for message in channel.history(limit=100):
+                    async for message in channel.history(limit=50):
                         if message.author == bot.user and message.embeds:
-                            # 임베드의 description이나 title에 저장된 제목 확인
-                            already_posted_titles.append(message.embeds[0].description.replace("**", ""))
+                            # 임베드 설명창의 **제목** 부분 추출
+                            clean_title = message.embeds[0].description.replace("**", "").strip()
+                            already_posted_titles.append(clean_title)
 
                     new_count = 0
                     for article in articles:
-                        title = article.find('h2').text.strip()
+                        title_element = article.find('h2')
+                        if not title_element: continue
+                        
+                        title = title_element.text.strip()
                         link = "https://www.leagueoflegends.com" + article['href']
                         
-                        # 3. 채널 히스토리에 이미 있는 제목이면 패스!
+                        # 중복 검사
                         if title in already_posted_titles:
                             continue
                         
-                        # 4. 정말 새로운 소식만 전송
                         embed = discord.Embed(
-                            title="🆕 공식 홈페이지 소식",
+                            title="🆕 롤 공식 홈페이지 소식",
                             description=f"**{title}**",
                             url=link,
                             color=0x0066ff
@@ -75,35 +80,34 @@ async def check_lol_news():
                         embed.set_footer(text="League of Legends News Feed")
                         await channel.send(embed=embed)
                         new_count += 1
+                        print(f"--- [로그] 뉴스 전송 완료: {title} ---")
                     
-                    if new_count > 0:
-                        print(f"--- 새 소식 {new_count}건 업데이트 완료 ---")
-                        
+                    if new_count == 0:
+                        print("--- [로그] 새로운 뉴스가 없습니다. ---")
         except Exception as e:
-            print(f"뉴스 체크 중 오류 발생: {e}")
+            print(f"--- [로그] 뉴스 루프 에러 발생: {e} ---")
 
 @bot.event
 async def on_ready():
-    print("--- [로그] 디스코드와 연결되었습니다! ---")
-    print(f"--- [로그] 봇 이름: {bot.user.name} ---")
-    # 뉴스 체크 루프 시작
+    print(f"--- [로그] 로그인 성공: {bot.user.name} ---")
+    # 뉴스 체크 루프 시작 (중복 실행 방지)
     if not check_lol_news.is_running():
         check_lol_news.start()
-        print("--- [로그] 뉴스 체크 루프가 시작되었습니다! ---")
+        print("--- [로그] 뉴스 체크 루프가 가동되었습니다! ---")
 
-# --- [ 기존 기능: 서버 입장 시 역할 생성 ] ---
+# --- [ 기존 기능: 서버 입장 시 역할 자동 생성 ] ---
 @bot.event
 async def on_guild_join(guild):
-    print(f"새로운 서버 입장: {guild.name}")
+    print(f"--- [로그] 새로운 서버 입장: {guild.name} ---")
     for role_name, color_hex in TIER_DATA.items():
         if not discord.utils.get(guild.roles, name=role_name):
             try:
                 await guild.create_role(name=role_name, color=discord.Color(color_hex), hoist=True)
             except discord.Forbidden:
-                print(f"{guild.name} 서버에서 역할 생성 권한이 없습니다.")
+                print(f"--- [로그] {guild.name} 서버: 역할 생성 권한 없음 ---")
                 break
 
-# --- [ 기존 기능: 인증 명령어 ] ---
+# --- [ 기존 기능: 인증 및 갱신 ] ---
 @bot.command()
 async def 인증(ctx, *, summoner_name):
     if "#" not in summoner_name:
@@ -120,10 +124,8 @@ async def 인증(ctx, *, summoner_name):
         color=0x5865F2
     )
     embed.set_thumbnail(url=icon_url)
-    embed.set_footer(text="인증이 완료되면 다시 원래 아이콘으로 바꾸셔도 됩니다.")
     await ctx.send(embed=embed)
 
-# --- [ 기존 기능: 확인 명령어 ] ---
 @bot.command()
 async def 확인(ctx):
     if ctx.author.id not in pending_users:
@@ -149,16 +151,13 @@ async def 확인(ctx):
                 current_icon = sum_data.get('profileIconId')
 
             if current_icon == user_info["icon"]:
-                await ctx.send(f"✅ **{user_info['name']}**님, 인증에 성공했습니다!\n이제 `!갱신 {user_info['name']}`을 입력하여 티어 역할을 받으세요.")
+                await ctx.send(f"✅ **{user_info['name']}**님, 인증 성공!\n이제 `!갱신 {user_info['name']}`을 입력하세요.")
                 del pending_users[ctx.author.id]
             else:
-                await ctx.send(f"❌ 아이콘이 다릅니다. (현재: {current_icon}번 / 목표: {user_info['icon']}번)\n아이콘 변경 후 다시 `!확인`을 눌러주세요.")
-        
-        except Exception as e:
-            traceback.print_exc()
-            await ctx.send("오류가 발생했습니다. 라이엇 API 키를 확인하세요.")
+                await ctx.send(f"❌ 아이콘 불일치. (현재: {current_icon} / 목표: {user_info['icon']})")
+        except Exception:
+            await ctx.send("오류 발생. API 키를 확인하세요.")
 
-# --- [ 기존 기능: 갱신 명령어 ] ---
 @bot.command()
 async def 갱신(ctx, *, summoner_name):
     if "#" not in summoner_name:
@@ -166,17 +165,13 @@ async def 갱신(ctx, *, summoner_name):
         return
 
     name, tag = summoner_name.split("#")
-
     async with aiohttp.ClientSession() as session:
         try:
             acc_url = f"https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name}/{tag}?api_key={RIOT_API_KEY}"
             async with session.get(acc_url) as r1:
                 acc_data = await r1.json()
                 puuid = acc_data.get('puuid')
-                if not puuid:
-                    await ctx.send("❌ 해당 소환사 정보를 찾을 수 없습니다.")
-                    return
-
+            
             league_url = f"https://kr.api.riotgames.com/lol/league/v4/entries/by-puuid/{puuid}?api_key={RIOT_API_KEY}"
             async with session.get(league_url) as r2:
                 league_data = await r2.json()
@@ -191,18 +186,23 @@ async def 갱신(ctx, *, summoner_name):
                 new_role = discord.utils.get(ctx.guild.roles, name=role_name)
 
                 if not new_role:
-                    await ctx.send(f"❌ 서버에 '{role_name}' 역할이 없습니다. 관리자에게 문의하세요.")
+                    await ctx.send(f"❌ '{role_name}' 역할이 서버에 없습니다.")
                     return
 
-                roles_to_remove = [r for r in ctx.author.roles if r.name in TIER_LIST]
-                if roles_to_remove:
-                    await ctx.author.remove_roles(*roles_to_remove)
-                
-                await ctx.author.add_roles(new_role)
-                await ctx.send(f"🔄 **{summoner_name}**님의 티어를 확인하여 **{user_tier}** 역할을 부여했습니다!")
+                # [개선] 권한 에러 방지를 위한 예외 처리 추가
+                try:
+                    # 기존 티어 역할 제거
+                    roles_to_remove = [r for r in ctx.author.roles if r.name in TIER_LIST]
+                    if roles_to_remove:
+                        await ctx.author.remove_roles(*roles_to_remove)
+                    
+                    # 새 역할 부여
+                    await ctx.author.add_roles(new_role)
+                    await ctx.send(f"🔄 **{user_tier}** 역할 부여 완료!")
+                except discord.Forbidden:
+                    await ctx.send("❌ 봇의 권한이 부족합니다. 서버 설정에서 **봇의 역할 순위를 티어 역할보다 위로** 올려주세요!")
 
-        except Exception as e:
-            traceback.print_exc()
-            await ctx.send("갱신 중 오류가 발생했습니다. 라이엇 API 키를 확인하세요.")
+        except Exception:
+            await ctx.send("갱신 중 오류가 발생했습니다.")
 
 bot.run(DISCORD_TOKEN)
