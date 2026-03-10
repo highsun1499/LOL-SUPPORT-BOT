@@ -3,11 +3,10 @@ from discord.ext import commands
 import aiohttp
 import random
 import traceback
-import os  # 보안을 위해 환경 변수를 불러오는 모듈입니다.
+import os
 
 # ================= [ 설정 구역 ] =================
-# 깃허브 Secrets에 저장한 이름을 그대로 가져옵니다.
-# 코드를 공개(Public)로 전환해도 실제 키값은 노출되지 않습니다.
+# 깃허브 Secrets 및 main.yml에 적은 이름과 똑같이 맞췄습니다.
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
@@ -73,7 +72,6 @@ async def 확인(ctx):
     
     async with aiohttp.ClientSession() as session:
         try:
-            # PUUID 조회
             acc_url = f"https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name}/{tag}?api_key={RIOT_API_KEY}"
             async with session.get(acc_url) as r1:
                 acc_data = await r1.json()
@@ -82,7 +80,6 @@ async def 확인(ctx):
                     await ctx.send("❌ 라이엇 계정 정보를 찾을 수 없습니다.")
                     return
 
-            # 현재 아이콘 조회
             sum_url = f"https://kr.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}?api_key={RIOT_API_KEY}"
             async with session.get(sum_url) as r2:
                 sum_data = await r2.json()
@@ -130,4 +127,20 @@ async def 갱신(ctx, *, summoner_name):
                 role_name = user_tier.capitalize()
                 new_role = discord.utils.get(ctx.guild.roles, name=role_name)
 
-                if not new_
+                if not new_role:
+                    await ctx.send(f"❌ 서버에 '{role_name}' 역할이 없습니다. 관리자에게 문의하세요.")
+                    return
+
+                roles_to_remove = [r for r in ctx.author.roles if r.name in TIER_LIST]
+                if roles_to_remove:
+                    await ctx.author.remove_roles(*roles_to_remove)
+                
+                await ctx.author.add_roles(new_role)
+                await ctx.send(f"🔄 **{summoner_name}**님의 티어를 확인하여 **{user_tier}** 역할을 부여했습니다!")
+
+        except Exception as e:
+            traceback.print_exc()
+            await ctx.send("갱신 중 오류가 발생했습니다. 라이엇 API 키를 확인하세요.")
+
+# 마지막 실행 부분의 이름을 DISCORD_TOKEN으로 맞췄습니다.
+bot.run(DISCORD_TOKEN)
