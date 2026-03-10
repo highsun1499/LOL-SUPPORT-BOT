@@ -36,48 +36,60 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # --- [ 뉴스 크롤링 핵심 함수 ] ---
 async def fetch_and_post_news():
-    log("뉴스 크롤링 시도 중...")
-    url = "https://www.leagueoflegends.com/ko-kr/news/" # 주소 변경
+    log("RSS 피드 읽는 중...")
+    # [수정] rss.app에서 받은 XML 링크를 여기에 넣으세요!
+    rss_url = "https://rss.app/feeds/ibBUjKJnYGzR4y8Q.xml" 
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    async with aiohttp.ClientSession(headers=headers) as session: # 헤더 추가
+    async with aiohttp.ClientSession(headers=headers) as session:
         try:
             channel = await bot.fetch_channel(NEWS_CHANNEL_ID)
-            async with session.get(url) as response:
-                log(f"접속 시도 결과: {response.status}") # 상태 코드 확인용
+            async with session.get(rss_url) as response:
                 if response.status == 200:
-                    html = await response.text()
-                    soup = BeautifulSoup(html, 'html.parser')
-                    articles = soup.select('a[data-testid^="article-card-"]')[:5]
-                    articles.reverse() 
+                    xml_data = await response.text()
+                    # XML 파싱을 위해 'xml' 또는 'html.parser' 사용
+                    soup = BeautifulSoup(xml_data, 'xml') 
+                    
+                    # RSS의 표준 아이템 태그인 <item>을 찾습니다.
+                    items = soup.find_all('item')[:10]
+                    items.reverse() # 과거순 정렬
 
-                    # 이미 올린 뉴스인지 채널 메시지 확인
+                    # 중복 체크용 히스토리
                     already_posted = []
-                    async for msg in channel.history(limit=20):
+                    async for msg in channel.history(limit=100):
                         if msg.author == bot.user and msg.embeds:
                             already_posted.append(msg.embeds[0].description.replace("**", "").strip())
 
                     new_count = 0
-                    for art in articles:
-                        title = art.find('h2').text.strip()
-                        link = "https://www.leagueoflegends.com" + art['href']
+                    for item in items:
+                        title = item.title.text.strip()
+                        link = item.link.text.strip()
                         
+                        # 중복 검사
                         if title in already_posted:
                             continue
                         
-                        embed = discord.Embed(title="🆕 롤 최신 소식", description=f"**{title}**", url=link, color=0x0066ff)
+                        embed = discord.Embed(
+                            title="📢 롤 공식 뉴스 (RSS)",
+                            description=f"**{title}**",
+                            url=link,
+                            color=0x00FF99 # RSS 버전은 색상을 살짝 다르게 해볼까요?
+                        )
+                        embed.set_footer(text="League of Legends RSS Feed")
+                        
                         await channel.send(embed=embed)
                         new_count += 1
-                        log(f"뉴스 전송 완료: {title}")
+                        log(f"RSS 뉴스 전송: {title}")
                     
                     if new_count == 0:
-                        log("새로운 뉴스가 없습니다.")
+                        log(f"RSS 피드 {len(items)}개 분석 완료, 새 소식 없음.")
                 else:
-                    log(f"홈페이지 접속 실패 (상태 코드: {response.status})")
+                    log(f"RSS 접속 실패: {response.status}")
         except Exception as e:
-            log(f"뉴스 처리 중 에러: {e}")
+            log(f"RSS 처리 중 에러 발생: {e}")
 
 @tasks.loop(minutes=60)
 async def news_loop():
