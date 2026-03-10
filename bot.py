@@ -21,9 +21,6 @@ TIER_DATA = {
     "Iron": 0x51484a, "Unranked": 0x000000
 }
 TIER_LIST = list(TIER_DATA.keys())
-
-# 중복 알림 방지용 변수
-last_news_title = ""
 # ===============================================
 
 intents = discord.Intents.all()
