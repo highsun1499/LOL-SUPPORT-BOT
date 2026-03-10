@@ -31,7 +31,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 pending_users = {}
 
 # --- [ 신규 기능: 롤 새소식 크롤링 루프 ] ---
-@tasks.loop(minutes=30)
+processed_news = set()
+
+@tasks.loop(minutes=60)
 async def check_lol_news():
     global last_news_title
     url = "https://www.leagueoflegends.com/ko-kr/news/latest/"
@@ -43,28 +45,40 @@ async def check_lol_news():
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # 최신 뉴스 카드 선택 (사이트 구조 기준)
-                    first_article = soup.select_one('a[data-testid="article-card-0"]')
-                    if first_article:
-                        title = first_article.find('h2').text.strip()
-                        link = "https://www.leagueoflegends.com" + first_article['href']
+                    # 뉴스 카드들을 모두 가져옵니다 (상위 10개 정도)
+                    articles = soup.select('a[data-testid^="article-card-"]')[:10]
+                    articles.reverse() # 오래된 순서대로 정렬해서 올리기 위해 뒤집음
+                    
+                    channel = bot.get_channel(NEWS_CHANNEL_ID)
+                    if not channel: return
+
+                    new_count = 0
+                    for article in articles:
+                        title = article.find('h2').text.strip()
+                        link = "https://www.leagueoflegends.com" + article['href']
                         
-                        # 새로운 소식이 올라왔을 때만 전송
-                        if title != last_news_title:
-                            # 처음 봇을 켰을 때 과거 소식이 한꺼번에 오는 것 방지
-                            if last_news_title != "":
-                                channel = bot.get_channel(NEWS_CHANNEL_ID)
-                                if channel:
-                                    embed = discord.Embed(
-                                        title="🆕 롤 공식 홈페이지 새소식",
-                                        description=f"**{title}**",
-                                        url=link,
-                                        color=0x0066ff
-                                    )
-                                    embed.set_footer(text="League of Legends News Feed")
-                                    await channel.send(embed=embed)
-                            
-                            last_news_title = title
+                        # 이미 처리한 뉴스라면 스킵
+                        if title in processed_news:
+                            continue
+                        
+                        # 새로운 뉴스 전송
+                        embed = discord.Embed(
+                            title="공식 홈페이지 새 소식",
+                            description=f"**{title}**",
+                            url=link,
+                            color=0x0066ff
+                        )
+                        embed.set_footer(text="League of Legends News Feed")
+                        await channel.send(embed=embed)
+                        
+                        # 처리 목록에 추가
+                        processed_news.add(title)
+                        last_news_title = title
+                        new_count += 1
+                    
+                    if new_count > 0:
+                        print(f"--- 새 소식 {new_count}건 업데이트 완료 ---")
+                        
         except Exception as e:
             print(f"뉴스 체크 중 오류 발생: {e}")
 
