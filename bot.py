@@ -53,7 +53,7 @@ async def check_lol_news():
                     
                     # 채널 히스토리에서 이미 올린 뉴스 제목들 수집
                     already_posted_titles = []
-                    async for message in channel.history(limit=50):
+                    async for message in channel.history(limit=100):
                         if message.author == bot.user and message.embeds:
                             # 임베드 설명창의 **제목** 부분 추출
                             clean_title = message.embeds[0].description.replace("**", "").strip()
