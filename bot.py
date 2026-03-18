@@ -47,29 +47,29 @@ async def fetch_and_post_news():
             async with session.get(rss_url) as response:
                 if response.status == 200:
                     xml_data = await response.text()
-                    soup = BeautifulSoup(xml_data, 'html.parser') 
+                    # XML 파서 사용 (lxml 설치 필요: pip install lxml)
+                    soup = BeautifulSoup(xml_data, 'xml') 
                     
                     items = soup.find_all('item')[:10]
-                    items.reverse()
+                    items.reverse() # 오래된 순서대로 포스팅
 
-                    # 최근 메시지 50개에서 중복 제목 확인
-                    already_posted = []
+                    # 제목 대신 URL로 중복 체크 (더 정확함)
+                    already_posted_urls = []
                     async for msg in channel.history(limit=50):
                         if msg.author == bot.user and msg.embeds:
-                            already_posted.append(msg.embeds[0].title)
+                            already_posted_urls.append(msg.embeds[0].url)
 
                     new_count = 0
                     for item in items:
-                        raw_title = item.find('title').text
+                        raw_title = item.find('title').text if item.find('title') else "제목 없음"
                         clean_title = re.sub(r'<!\[CDATA\[|\]\]>', '', raw_title).strip()
                         
-                        # 링크 추출 로직 최적화
-                        link_tag = item.find('link')
-                        link = link_tag.text.strip() if link_tag and link_tag.text else ""
+                        link = item.find('link').text.strip() if item.find('link') else ""
                         if not link and item.find('guid'):
                             link = item.find('guid').text.strip()
 
-                        if clean_title in already_posted:
+                        # 중복 체크: URL이 이미 채널에 있다면 건너뜀
+                        if link in already_posted_urls:
                             continue
                         
                         embed = discord.Embed(
@@ -80,12 +80,18 @@ async def fetch_and_post_news():
                         )
                         embed.set_footer(text="출처 : https://www.leagueoflegends.com/ko-kr/news/")
                         
-                        # 이미지 썸네일 처리
-                        media = item.find('media:content')
+                        # 이미지 추출 로직 강화
+                        media = item.find('content', namespace="http://search.yahoo.com/mrss/")
                         if media and media.get('url'):
                             embed.set_image(url=media['url'])
+                        elif item.find('description'): # 미디어 태그가 없으면 본문에서 이미지 추출 시도
+                            desc_soup = BeautifulSoup(item.find('description').text, 'html.parser')
+                            img_tag = desc_soup.find('img')
+                            if img_tag and img_tag.get('src'):
+                                embed.set_image(url=img_tag['src'])
 
                         await channel.send(embed=embed)
+                        already_posted_urls.append(link) # 보낸 후 즉시 리스트에 추가
                         new_count += 1
                         log(f"신규 뉴스 포스팅: {clean_title}")
                     
@@ -95,6 +101,7 @@ async def fetch_and_post_news():
                     log(f"RSS 접근 실패: {response.status}")
         except Exception as e:
             log(f"뉴스 루프 에러: {e}")
+            traceback.print_exc() # 에러 상세 내용 로그 출력
 
 @tasks.loop(minutes=60)
 async def news_loop():
