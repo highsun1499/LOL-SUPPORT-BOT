@@ -37,71 +37,59 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # --- [ 뉴스 크롤링 핵심 함수 ] ---
 async def fetch_and_post_news():
-    log("RSS 피드 체크 시작...")
-    rss_url = "https://rss.app/feeds/ibBUjKJnYGzR4y8Q.xml" 
+    log("롤 공식 홈페이지 뉴스 체크 시작...")
+    # RSS 대신 공식 홈페이지 뉴스 목록 페이지 사용
+    news_url = "https://www.leagueoflegends.com/ko-kr/news/" 
     headers = {"User-Agent": "Mozilla/5.0"}
     
     async with aiohttp.ClientSession(headers=headers) as session:
         try:
             channel = await bot.fetch_channel(NEWS_CHANNEL_ID)
-            async with session.get(rss_url) as response:
+            async with session.get(news_url) as response:
                 if response.status == 200:
-                    xml_data = await response.text()
-                    # XML 파서 사용 (lxml 설치 필요: pip install lxml)
-                    soup = BeautifulSoup(xml_data, 'xml') 
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
                     
-                    items = soup.find_all('item')[:10]
-                    items.reverse() # 오래된 순서대로 포스팅
+                    # 뉴스 카드들을 찾습니다 (공식 홈페이지 구조 기준)
+                    # 구조가 변경될 수 있으니 최신 태그를 확인해야 합니다.
+                    articles = soup.select('a[data-testid="article-card"]')[:5] # 최신 뉴스 5개
+                    articles.reverse()
 
-                    # 제목 대신 URL로 중복 체크 (더 정확함)
-                    already_posted_urls = []
-                    async for msg in channel.history(limit=50):
+                    already_posted_links = []
+                    async for msg in channel.history(limit=20):
                         if msg.author == bot.user and msg.embeds:
-                            already_posted_urls.append(msg.embeds[0].url)
+                            already_posted_links.append(msg.embeds[0].url)
 
                     new_count = 0
-                    for item in items:
-                        raw_title = item.find('title').text if item.find('title') else "제목 없음"
-                        clean_title = re.sub(r'<!\[CDATA\[|\]\]>', '', raw_title).strip()
-                        
-                        link = item.find('link').text.strip() if item.find('link') else ""
-                        if not link and item.find('guid'):
-                            link = item.find('guid').text.strip()
+                    for article in articles:
+                        link = "https://www.leagueoflegends.com" + article.get('href')
+                        title = article.find('h2').text.strip() if article.find('h2') else "제목 없음"
+                        img_tag = article.find('img')
+                        image_url = img_tag.get('src') if img_tag else ""
 
-                        # 중복 체크: URL이 이미 채널에 있다면 건너뜀
-                        if link in already_posted_urls:
+                        if link in already_posted_links:
                             continue
-                        
+
                         embed = discord.Embed(
-                            title=clean_title,
+                            title=title,
                             url=link,
-                            description="리그 오브 레전드 공식 홈페이지 새 소식",
+                            description="리그 오브 레전드 최신 소식",
                             color=0x00FF99
                         )
-                        embed.set_footer(text="출처 : https://www.leagueoflegends.com/ko-kr/news/")
-                        
-                        # 이미지 추출 로직 강화
-                        media = item.find('content', namespace="http://search.yahoo.com/mrss/")
-                        if media and media.get('url'):
-                            embed.set_image(url=media['url'])
-                        elif item.find('description'): # 미디어 태그가 없으면 본문에서 이미지 추출 시도
-                            desc_soup = BeautifulSoup(item.find('description').text, 'html.parser')
-                            img_tag = desc_soup.find('img')
-                            if img_tag and img_tag.get('src'):
-                                embed.set_image(url=img_tag['src'])
+                        if image_url:
+                            embed.set_image(url=image_url)
+                        embed.set_footer(text="출처 : LoL 공식 홈페이지")
 
                         await channel.send(embed=embed)
-                        already_posted_urls.append(link) # 보낸 후 즉시 리스트에 추가
                         new_count += 1
-                        log(f"신규 뉴스 포스팅: {clean_title}")
-                    
+                        log(f"신규 뉴스 포스팅: {title}")
+
                     if new_count == 0:
                         log("새로운 소식이 없습니다.")
                 else:
-                    log(f"RSS 접근 실패: {response.status}")
+                    log(f"홈페이지 접근 실패: {response.status}")
         except Exception as e:
-            log(f"뉴스 루프 에러: {e}")
-            traceback.print_exc() # 에러 상세 내용 로그 출력
+            log(f"뉴스 크롤링 에러: {e}")
 
 @tasks.loop(minutes=60)
 async def news_loop():
