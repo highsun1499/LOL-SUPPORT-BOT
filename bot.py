@@ -14,7 +14,8 @@ def log(message):
 # ================= [ 설정 구역 ] =================
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-NEWS_CHANNEL_ID = 1480944831600656384  # 뉴스 채널 ID
+# 뉴스 채널 ID (정수형으로 확실히 설정)
+NEWS_CHANNEL_ID = 1480944831600656384  
 
 # 티어별 색상 설정
 TIER_DATA = {
@@ -25,7 +26,7 @@ TIER_DATA = {
 }
 TIER_LIST = list(TIER_DATA.keys())
 
-# 인증 대기 유저 저장소 (봇 재시작 시 초기화됨)
+# 인증 대기 유저 저장소
 pending_users = {}
 # ===============================================
 
@@ -38,38 +39,66 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # --- [ 뉴스 크롤링 핵심 함수 ] ---
 async def fetch_and_post_news():
     log("롤 공식 홈페이지 뉴스 체크 시작...")
-    # RSS 대신 공식 홈페이지 뉴스 목록 페이지 사용
     news_url = "https://www.leagueoflegends.com/ko-kr/news/" 
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # 브라우저처럼 보이게 헤더 보강
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     
     async with aiohttp.ClientSession(headers=headers) as session:
         try:
-            channel = await bot.fetch_channel(NEWS_CHANNEL_ID)
+            # 채널 가져오기 (ID를 int로 강제 변환)
+            channel = await bot.fetch_channel(int(NEWS_CHANNEL_ID))
+            
             async with session.get(news_url) as response:
                 if response.status == 200:
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # 뉴스 카드들을 찾습니다 (공식 홈페이지 구조 기준)
-                    # 구조가 변경될 수 있으니 최신 태그를 확인해야 합니다.
-                    articles = soup.select('a[data-testid="article-card"]')[:5] # 최신 뉴스 5개
-                    articles.reverse()
+                    # 1. 뉴스 카드 찾기 (다양한 선택자 시도)
+                    articles = soup.select('a[data-testid="article-card"]')
+                    if not articles:
+                        articles = soup.select('a[class*="ArticleCard"]')
+                    if not articles:
+                        # 최후의 수단: 링크에 /news/가 포함된 모든 a 태그 탐색
+                        articles = [a for a in soup.find_all('a', href=True) if '/news/' in a['href'] and a.find('h2')]
 
+                    log(f"홈페이지에서 찾은 뉴스 개수: {len(articles)}개")
+                    
+                    if not articles:
+                        log("뉴스 아이템을 찾지 못했습니다. 구조 확인이 필요합니다.")
+                        return
+
+                    # 최신순 5개만 처리 (과거 데이터부터 올리기 위해 리버스)
+                    target_articles = articles[:5]
+                    target_articles.reverse()
+
+                    # 이미 올린 뉴스 링크 확인 (최근 20개)
                     already_posted_links = []
                     async for msg in channel.history(limit=20):
                         if msg.author == bot.user and msg.embeds:
                             already_posted_links.append(msg.embeds[0].url)
 
                     new_count = 0
-                    for article in articles:
-                        link = "https://www.leagueoflegends.com" + article.get('href')
-                        title = article.find('h2').text.strip() if article.find('h2') else "제목 없음"
-                        img_tag = article.find('img')
-                        image_url = img_tag.get('src') if img_tag else ""
-
+                    for article in target_articles:
+                        href = article.get('href')
+                        if not href: continue
+                        
+                        # 전체 링크 생성
+                        link = href if href.startswith('http') else "https://www.leagueoflegends.com" + href
+                        
+                        # 중복 체크
                         if link in already_posted_links:
                             continue
 
+                        # 제목/이미지 추출
+                        title_el = article.find('h2') or article.select_one('h3')
+                        title = title_el.text.strip() if title_el else "제목 없음"
+                        
+                        img_tag = article.find('img')
+                        image_url = img_tag.get('src') if img_tag else ""
+
+                        # 임베드 메시지 생성
                         embed = discord.Embed(
                             title=title,
                             url=link,
@@ -85,11 +114,12 @@ async def fetch_and_post_news():
                         log(f"신규 뉴스 포스팅: {title}")
 
                     if new_count == 0:
-                        log("새로운 소식이 없습니다.")
+                        log("새로운 소식이 없습니다. (기존 뉴스와 중복)")
                 else:
                     log(f"홈페이지 접근 실패: {response.status}")
         except Exception as e:
-            log(f"뉴스 크롤링 에러: {e}")
+            log(f"뉴스 크롤링 에러 발생: {e}")
+            traceback.print_exc()
 
 @tasks.loop(minutes=60)
 async def news_loop():
@@ -98,6 +128,7 @@ async def news_loop():
 @bot.event
 async def on_ready():
     log(f"봇 로그인 성공: {bot.user.name}")
+    # 봇 시작 시 바로 뉴스 체크 실행
     await fetch_and_post_news()
     if not news_loop.is_running():
         news_loop.start()
@@ -132,7 +163,6 @@ async def 확인(ctx):
     
     async with aiohttp.ClientSession() as session:
         try:
-            # Riot ID로 PUUID 가져오기
             acc_url = f"https://asia.api.riotgames.com/riot/account/v1/accounts/by-riot-id/{name}/{tag}?api_key={RIOT_API_KEY}"
             async with session.get(acc_url) as r1:
                 if r1.status != 200:
@@ -140,7 +170,6 @@ async def 확인(ctx):
                     return
                 puuid = (await r1.json()).get('puuid')
 
-            # PUUID로 아이콘 확인
             sum_url = f"https://kr.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}?api_key={RIOT_API_KEY}"
             async with session.get(sum_url) as r2:
                 current_icon = (await r2.json()).get('profileIconId')
@@ -184,7 +213,6 @@ async def 갱신(ctx, *, summoner_name):
                     return
 
                 try:
-                    # 기존 티어 역할 제거 및 새 역할 부여 (한 번에 처리 가능)
                     roles_to_remove = [r for r in ctx.author.roles if r.name in TIER_LIST]
                     await ctx.author.remove_roles(*roles_to_remove)
                     await ctx.author.add_roles(new_role)
