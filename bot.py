@@ -58,14 +58,13 @@ async def fetch_and_post_news():
                     articles = soup.select('a[data-testid="articlefeaturedcard-component"]')
                     log(f"홈페이지에서 찾은 뉴스 개수: {len(articles)}개")
                     
-                    if not articles:
-                        return
+                    if not articles: return
 
                     target_articles = articles[:10]
                     target_articles.reverse()
 
                     already_posted_links = []
-                    async for msg in channel.history(limit=100):
+                    async for msg in channel.history(limit=50):
                         if msg.author == bot.user and msg.embeds:
                             already_posted_links.append(msg.embeds[0].url)
 
@@ -73,8 +72,7 @@ async def fetch_and_post_news():
                         href = article.get('href', '')
                         link = href if href.startswith('http') else "https://www.leagueoflegends.com" + href
                         
-                        if link in already_posted_links:
-                            continue
+                        if link in already_posted_links: continue
 
                         title_el = article.find('div', {'data-testid': 'card-title'})
                         title = title_el.get_text().strip() if title_el else "새로운 소식"
@@ -82,12 +80,22 @@ async def fetch_and_post_news():
                         desc_el = article.find('div', {'data-testid': 'card-description'})
                         description = desc_el.get_text().strip() if desc_el else "클릭하여 자세한 내용을 확인하세요."
                         
+                        # [핵심 수정] 이미지 주소 추출 및 정화
                         img_tag = article.find('img', {'data-testid': 'mediaImage'})
                         image_url = ""
-                        if img_tag and img_tag.get('src'):
-                            image_url = html.unescape(img_tag.get('src')).strip()
-                            if not image_url.startswith('http'):
-                                image_url = ""
+                        if img_tag:
+                            # src 또는 data-src 우선 추출
+                            raw_src = img_tag.get('src') or img_tag.get('data-src') or ""
+                            if raw_src:
+                                # 1. &amp;를 &로 변환 (html.unescape)
+                                image_url = html.unescape(raw_src).strip()
+                                
+                                # 2. 만약 //cmsassets... 처럼 시작하면 https: 붙여주기
+                                if image_url.startswith('//'):
+                                    image_url = "https:" + image_url
+                                # 3. 만약 /cms... 처럼 도메인 없이 시작하면 붙여주기
+                                elif image_url.startswith('/') and not image_url.startswith('//'):
+                                    image_url = "https://www.leagueoflegends.com" + image_url
 
                         embed = discord.Embed(
                             title=title,
@@ -95,21 +103,25 @@ async def fetch_and_post_news():
                             description=description,
                             color=0x00FF99
                         )
-                        if image_url:
+                        
+                        # URL이 유효할 때만 이미지 설정
+                        if image_url and image_url.startswith('http'):
                             embed.set_image(url=image_url)
-                        embed.set_footer(text="출처 : 새 소식")
+                            log(f"이미지 삽입 성공: {title}")
+                        
+                        embed.set_footer(text="LoL News Update")
 
                         try:
                             await channel.send(embed=embed)
-                            log(f"신규 뉴스 포스팅 성공: {title}")
                         except Exception as send_error:
-                            log(f"메시지 전송 실패 ({title}): {send_error}")
-                else:
-                    log(f"홈페이지 접근 실패: {response.status}")
-        except Exception as e:
-            log(f"뉴스 크롤링 에러 발생: {e}")
-            traceback.print_exc()
+                            log(f"전송 실패: {send_error}")
 
+                else:
+                    log(f"접근 실패: {response.status}")
+        except Exception as e:
+            log(f"에러 발생: {e}")
+            traceback.print_exc()
+            
 # --- 뉴스 체크 루프 (60분마다) ---
 @tasks.loop(minutes=60)
 async def news_loop():
