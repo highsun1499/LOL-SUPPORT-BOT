@@ -55,6 +55,7 @@ async def fetch_and_post_news():
                     raw_html = await response.text()
                     soup = BeautifulSoup(raw_html, 'html.parser')
                     
+                    # 뉴스 카드들 찾기
                     articles = soup.select('a[data-testid="articlefeaturedcard-component"]')
                     log(f"홈페이지에서 찾은 뉴스 개수: {len(articles)}개")
                     
@@ -80,20 +81,23 @@ async def fetch_and_post_news():
                         desc_el = article.find('div', {'data-testid': 'card-description'})
                         description = desc_el.get_text().strip() if desc_el else "클릭하여 자세한 내용을 확인하세요."
                         
-                        # [핵심 수정] 이미지 주소 추출 및 정화
-                        img_tag = article.find('img', {'data-testid': 'mediaImage'})
+                        # [강화된 이미지 추출 로직]
                         image_url = ""
+                        # 1. mediaImage 또는 banner-image 우선 탐색
+                        img_tag = article.find('img', {'data-testid': 'mediaImage'}) or \
+                                  article.find('img', {'data-testid': 'banner-image'}) or \
+                                  article.find('img') # 최후의 수단으로 모든 img 태그 검색
+                        
                         if img_tag:
-                            # src 또는 data-src 우선 추출
+                            # src, data-src 중 있는 것을 가져옴
                             raw_src = img_tag.get('src') or img_tag.get('data-src') or ""
                             if raw_src:
-                                # 1. &amp;를 &로 변환 (html.unescape)
+                                # HTML 특수문자(&amp; 등) 제거
                                 image_url = html.unescape(raw_src).strip()
                                 
-                                # 2. 만약 //cmsassets... 처럼 시작하면 https: 붙여주기
+                                # 상대 경로 처리
                                 if image_url.startswith('//'):
                                     image_url = "https:" + image_url
-                                # 3. 만약 /cms... 처럼 도메인 없이 시작하면 붙여주기
                                 elif image_url.startswith('/') and not image_url.startswith('//'):
                                     image_url = "https://www.leagueoflegends.com" + image_url
 
@@ -104,23 +108,24 @@ async def fetch_and_post_news():
                             color=0x00FF99
                         )
                         
-                        # URL이 유효할 때만 이미지 설정
+                        # 이미지 설정 (유효성 검사 포함)
                         if image_url and image_url.startswith('http'):
                             embed.set_image(url=image_url)
-                            log(f"이미지 삽입 성공: {title}")
+                            log(f"이미지 추출 성공: {title}")
+                        else:
+                            log(f"이미지 추출 실패(주소 없음): {title}")
                         
                         embed.set_footer(text="LoL News Update")
 
                         try:
                             await channel.send(embed=embed)
+                            log(f"포스팅 완료: {title}")
                         except Exception as send_error:
                             log(f"전송 실패: {send_error}")
-
                 else:
-                    log(f"접근 실패: {response.status}")
+                    log(f"홈페이지 접근 실패: {response.status}")
         except Exception as e:
             log(f"에러 발생: {e}")
-            traceback.print_exc()
             
 # --- 뉴스 체크 루프 (60분마다) ---
 @tasks.loop(minutes=60)
