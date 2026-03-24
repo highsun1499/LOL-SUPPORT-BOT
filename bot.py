@@ -41,6 +41,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # --- 뉴스 크롤링 함수 ---
 async def fetch_and_post_news():
+    import html
+    import urllib.parse
+    
     log("롤 공식 홈페이지 뉴스 체크 시작...")
     news_url = "https://www.leagueoflegends.com/ko-kr/news/" 
     headers = {
@@ -80,81 +83,59 @@ async def fetch_and_post_news():
                         desc_el = article.find('div', {'data-testid': 'card-description'})
                         description = desc_el.get_text().strip() if desc_el else "클릭하여 자세한 내용을 확인하세요."
                         
-                        # ---[부모 탐색형 이미지 추출 로직 강화판] ---
-                        import html
-                        import re
-                        import urllib.parse
-                        
+                        # ---[오픈 그래프(og:image) 기반 메타 태그 추출 방식으로 전면 교체] ---
                         image_url = ""
-                        img_tag = None
-                        
-                        # 1. 탐색할 영역 지정: 본인(article)부터 시작해서 최대 4단계 부모까지 올라감
-                        nodes_to_search =[article]
-                        curr = article.parent
-                        for _ in range(4):
-                            if curr:
-                                # ★핵심: 만약 부모 영역 안에 다른 뉴스 기사 링크가 또 있다면 탐색 중단! 
-                                # (엉뚱한 다른 기사의 이미지를 긁어오는 것을 방지)
-                                if len(curr.select('a[data-testid^="article"]')) > 1:
-                                    break
-                                nodes_to_search.append(curr)
-                                curr = curr.parent
-                                
-                        # 2. 지정된 영역 안에서 유효한 이미지 찾기
-                        for node in nodes_to_search:
-                            # 먼저 정확한 이름표(data-testid)가 있는 것 중 투명 픽셀이 아닌 진짜 이미지 탐색
-                            for img in node.select('img[data-testid="mediaImage"], img[data-testid="banner-image"]'):
-                                tmp_src = img.get('src') or img.get('data-src') or img.get('srcset') or ''
-                                if tmp_src and 'data:image' not in tmp_src:
-                                    img_tag = img
-                                    break
-                            
-                            # 위에서 못 찾았다면 이름표가 없더라도 진짜 이미지가 있는지 싹 뒤짐
-                            if not img_tag:
-                                for img in node.find_all('img'):
-                                    tmp_src = img.get('src') or img.get('data-src') or img.get('srcset') or ''
-                                    if tmp_src and 'data:image' not in tmp_src:
-                                        img_tag = img
-                                        break
-                                        
-                            if img_tag:
-                                break # 유효한 이미지를 찾았으므로 상위 탐색 종료
-
-                        # 3. img 태그를 찾았다면 주소(URL) 추출
-                        if img_tag:
-                            raw_src = ""
-                            srcset = img_tag.get('srcset')
-                            if srcset:
-                                raw_src = srcset.split(',')[0].strip().split(' ')[0]
-                            else:
-                                raw_src = img_tag.get('src') or img_tag.get('data-src') or ""
-                            
-                            if raw_src:
-                                image_url = html.unescape(raw_src).strip()
-
-                        # 4. 여전히 못 찾았다면, style="background-image: url(...)" 형태로 숨겨져 있는지 탐색
-                        if not image_url:
-                            for node in nodes_to_search:
-                                bg_match = re.search(r'background(?:-image)?:\s*url\([\'"]?(https?://[^\'"\)]+)[\'"]?\)', str(node))
-                                if bg_match:
-                                    image_url = bg_match.group(1)
-                                    break
-
-                        # 5. 주소 보정 및 Next.js 보호막 우회
-                        if image_url:
-                            # 상대경로 보정
-                            if not image_url.startswith('http'):
-                                if image_url.startswith('//'):
-                                    image_url = "https:" + image_url
-                                elif image_url.startswith('/'):
-                                    image_url = "https://www.leagueoflegends.com" + image_url
+                        try:
+                            # 1. 추출한 뉴스 기사의 원본 링크로 봇이 직접 접속합니다.
+                            async with session.get(link) as article_resp:
+                                if article_resp.status == 200:
+                                    article_html = await article_resp.text()
+                                    article_soup = BeautifulSoup(article_html, 'html.parser')
                                     
-                            # 디스코드에서 로드 안되는 롤 공홈 내부 Next.js 이미지 파라미터에서 원본 CDN 주소만 추출
-                            if '/_next/image' in image_url:
-                                parsed = urllib.parse.urlparse(image_url)
-                                qs = urllib.parse.parse_qs(parsed.query)
-                                if 'url' in qs:
-                                    image_url = qs['url'][0]
+                                    # 2. SEO용으로 작성된 meta og:image (디스코드/카톡 썸네일용) 태그를 직접 찾습니다.
+                                    # 이 태그는 자바스크립트 실행 여부와 관계없이 HTML 원문에 항상 존재합니다!
+                                    og_img = article_soup.find('meta', property='og:image') or \
+                                             article_soup.find('meta', property='og:image:secure_url') or \
+                                             article_soup.find('meta', attrs={'name': 'twitter:image'})
+                                             
+                                    if og_img and og_img.get('content'):
+                                        image_url = og_img.get('content')
+                                    
+                                    # 3. 만약 메타 태그가 없다면, 본문의 가장 큰 배너 이미지를 찾습니다.
+                                    if not image_url:
+                                        header_img = article_soup.select_one('img[data-testid="banner-image"], header img')
+                                        if header_img:
+                                            raw_srcset = header_img.get('srcset')
+                                            if raw_srcset:
+                                                image_url = raw_srcset.split(',')[0].strip().split(' ')[0]
+                                            else:
+                                                image_url = header_img.get('src') or header_img.get('data-src') or ''
+                                                
+                                    # 4. 주소 보정 작업
+                                    if image_url:
+                                        image_url = html.unescape(image_url).strip()
+                                        if image_url.startswith('/'):
+                                            parsed_uri = urllib.parse.urlparse(link)
+                                            base_url = f"{parsed_uri.scheme}://{parsed_uri.netloc}"
+                                            image_url = base_url + image_url
+                        except Exception as e:
+                            log(f"개별 기사({title}) 접속 및 이미지 추출 에러: {e}")
+                            
+                        # 5. 혹시라도 개별 기사 접속이 실패했을 경우를 대비한 최후의 백업망 (기존 방식)
+                        if not image_url:
+                            for img in article.find_all('img'):
+                                tmp_src = img.get('src') or img.get('data-src') or ''
+                                tmp_srcset = img.get('srcset') or ''
+                                
+                                if tmp_srcset and 'data:image' not in tmp_srcset:
+                                    image_url = tmp_srcset.split(',')[0].strip().split(' ')[0]
+                                    break
+                                elif tmp_src and 'data:image' not in tmp_src:
+                                    image_url = tmp_src
+                                    break
+                                    
+                            if image_url and image_url.startswith('/'):
+                                image_url = "https://www.leagueoflegends.com" + image_url
                         # ---[이미지 추출 로직 끝] ---
 
                         embed = discord.Embed(
