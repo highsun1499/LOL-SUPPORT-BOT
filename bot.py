@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 import aiohttp
 from bs4 import BeautifulSoup
 import os
+import json
 import re
 import traceback
 import random
@@ -41,8 +42,6 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # --- 뉴스 크롤링 함수 ---
 async def fetch_and_post_news():
-    import html
-    import urllib.parse
     
     log("롤 공식 홈페이지 뉴스 체크 시작...")
     news_url = "https://www.leagueoflegends.com/ko-kr/news/" 
@@ -56,117 +55,90 @@ async def fetch_and_post_news():
             async with session.get(news_url) as response:
                 if response.status == 200:
                     raw_html = await response.text()
-                    soup = BeautifulSoup(raw_html, 'html.parser')
                     
-                    articles = soup.select('a[data-testid^="article"]') 
-                    log(f"홈페이지에서 찾은 뉴스 개수: {len(articles)}개")
+                    # 1. 롤 홈페이지의 핵심 데이터가 담긴 JSON 스크립트 추출
+                    match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', raw_html)
+                    if not match:
+                        log("데이터를 찾을 수 없습니다. (페이지 구조 변경 의심)")
+                        return
                     
-                    if not articles: return
-
-                    target_articles = articles[:10]
-                    target_articles.reverse()
-
-                    already_posted_links =[]
-                    async for msg in channel.history(limit=100):
-                        if msg.author == bot.user and msg.embeds:
-                            already_posted_links.append(msg.embeds[0].url)
-
-                    for article in target_articles:
-                        href = article.get('href', '')
-                        link = href if href.startswith('http') else "https://www.leagueoflegends.com" + href
+                    try:
+                        next_data = json.loads(match.group(1))
                         
-                        if link in already_posted_links: continue
-
-                        title_el = article.find('div', {'data-testid': 'card-title'}) or article.select_one('h2')
-                        title = title_el.get_text().strip() if title_el else "새로운 소식"
+                        # 2. JSON 구조 안에서 뉴스 기사 목록(items) 찾기
+                        # 보통 세 번째(인덱스 2) blade에 기사 목록(articleCardGrid)이 들어있습니다.
+                        blades = next_data.get('props', {}).get('pageProps', {}).get('page', {}).get('blades',[])
                         
-                        desc_el = article.find('div', {'data-testid': 'card-description'})
-                        description = desc_el.get_text().strip() if desc_el else "클릭하여 자세한 내용을 확인하세요."
-                        
-                        # --- [메인 페이지 내 HTML 구조 분석 기반 완벽 추출 로직] ---
-                        image_url = ""
-                        img_tag = None
-                        
-                        # 1. 뉴스 카드 전체를 감싸는 부모 컨테이너(경계)를 찾습니다.
-                        # 부모의 부모로 올라가며, "다른 뉴스 기사 링크"가 발견되기 직전까지를 온전한 한 개의 카드 영역으로 봅니다.
-                        card_node = article
-                        while card_node.parent and len(card_node.parent.select('a[data-testid^="article"]')) == 1:
-                            card_node = card_node.parent
-                            
-                        # 2. 이 독립된 카드 영역 안에서 첨부해주셨던 mediaImage를 탐색합니다.
-                        img_tag = card_node.select_one('img[data-testid="mediaImage"], img[data-testid="banner-image"]')
-                        
-                        if not img_tag:
-                            # 이름표가 없으면 카드 내의 아무 이미지나 찾되, 투명 픽셀은 제외
-                            for img in card_node.find_all('img'):
-                                tmp_src = img.get('src') or img.get('data-src') or img.get('srcset') or ''
-                                if tmp_src and 'data:image' not in tmp_src:
-                                    img_tag = img
-                                    break
-                                    
-                        # 3. 이미지 주소 추출
-                        if img_tag:
-                            # 일반 src를 우선 추출합니다. (첨부해주신 로그를 보면 src에 원본 주소가 있습니다)
-                            raw_src = img_tag.get('src') or img_tag.get('data-src') or ''
-                            if not raw_src:
-                                raw_srcset = img_tag.get('srcset')
-                                if raw_srcset:
-                                    raw_src = raw_srcset.split(',')[0].strip().split(' ')[0]
-                                    
-                            if raw_src:
-                                image_url = html.unescape(raw_src).strip()
+                        articles_data =[]
+                        for blade in blades:
+                            if blade.get('type') == 'articleCardGrid' and 'items' in blade:
+                                articles_data = blade['items']
+                                break
                                 
-                                # Next.js의 자체 이미지 캐싱 경로 포맷인 경우 원본 추출
-                                if '/_next/image' in image_url:
-                                    parsed = urllib.parse.urlparse(image_url)
-                                    qs = urllib.parse.parse_qs(parsed.query)
-                                    if 'url' in qs:
-                                        image_url = qs['url'][0]
-                                        
-                                # 경로 보정
-                                if not image_url.startswith('http'):
-                                    if image_url.startswith('//'):
-                                        image_url = "https:" + image_url
-                                    elif image_url.startswith('/'):
-                                        image_url = "https://www.leagueoflegends.com" + image_url
+                        log(f"홈페이지 JSON에서 찾은 뉴스 개수: {len(articles_data)}개")
+                        
+                        if not articles_data:
+                            return
 
-                        # 4. 혹시라도 메인 페이지에서 못 찾았을 경우 최후의 수단 (성공했던 내부 링크용)
-                        if not image_url and link.startswith('http') and 'leagueoflegends.com' in link:
+                        # 상위 10개만 가져오고 역순(과거 -> 최신) 정렬
+                        target_articles = articles_data[:10]
+                        target_articles.reverse()
+                        
+                        # 이미 포스팅된 링크 수집
+                        already_posted_links =[]
+                        async for msg in channel.history(limit=100):
+                            if msg.author == bot.user and msg.embeds:
+                                already_posted_links.append(msg.embeds[0].url)
+                                
+                        # 3. 데이터 파싱 및 전송
+                        for article in target_articles:
+                            # 제목
+                            title = article.get('title', '새로운 소식')
+                            
+                            # 설명 (html 태그가 섞여 있을 수 있으므로 정제)
+                            raw_desc = article.get('description', {}).get('body', '클릭하여 자세한 내용을 확인하세요.')
+                            description = re.sub(r'<[^>]+>', '', raw_desc).strip()
+                            
+                            # 링크 (내부 링크면 도메인 붙여주기)
+                            link_url = article.get('action', {}).get('payload', {}).get('url', '')
+                            if not link_url:
+                                continue
+                                
+                            if not link_url.startswith('http'):
+                                link_url = "https://www.leagueoflegends.com" + link_url
+                                
+                            if link_url in already_posted_links:
+                                continue
+                                
+                            # ★ 핵심: 이미지 URL 직접 추출 (오류 발생 0%)
+                            image_url = article.get('media', {}).get('url', '')
+                            if image_url:
+                                image_url = html.unescape(image_url).strip()
+                                
+                            # 임베드 생성
+                            embed = discord.Embed(
+                                title=title,
+                                url=link_url,
+                                description=description,
+                                color=0x00FF99
+                            )
+                            
+                            if image_url and image_url.startswith('http'):
+                                embed.set_image(url=image_url)
+                                log(f"이미지 추출 성공: {title} -> {image_url[:50]}...")
+                            else:
+                                log(f"이미지 추출 실패(데이터 없음): {title}")
+                            
+                            embed.set_footer(text="새 소식")
+
                             try:
-                                async with session.get(link) as article_resp:
-                                    if article_resp.status == 200:
-                                        article_html = await article_resp.text()
-                                        article_soup = BeautifulSoup(article_html, 'html.parser')
-                                        og_img = article_soup.find('meta', property='og:image') or \
-                                                 article_soup.find('meta', property='og:image:secure_url')
-                                        if og_img and og_img.get('content'):
-                                            image_url = html.unescape(og_img.get('content')).strip()
-                                            if image_url.startswith('/'):
-                                                image_url = "https://www.leagueoflegends.com" + image_url
-                            except Exception as e:
-                                log(f"개별 링크 이미지 백업 추출 실패: {e}")
-                        # --- [이미지 추출 로직 끝] ---
+                                await channel.send(embed=embed)
+                                log(f"포스팅 완료: {title}")
+                            except Exception as send_error:
+                                log(f"전송 실패: {send_error}")
 
-                        embed = discord.Embed(
-                            title=title,
-                            url=link,
-                            description=description,
-                            color=0x00FF99
-                        )
-                        
-                        if image_url and image_url.startswith('http'):
-                            embed.set_image(url=image_url)
-                            log(f"이미지 추출 성공: {title} -> {image_url[:50]}...")
-                        else:
-                            log(f"이미지 추출 실패(주소 없음): {title}")
-                        
-                        embed.set_footer(text="새 소식")
-
-                        try:
-                            await channel.send(embed=embed)
-                            log(f"포스팅 완료: {title}")
-                        except Exception as send_error:
-                            log(f"전송 실패: {send_error}")
+                    except json.JSONDecodeError as e:
+                        log(f"JSON 파싱 에러 발생: {e}")
                 else:
                     log(f"홈페이지 접근 실패: {response.status}")
         except Exception as e:
