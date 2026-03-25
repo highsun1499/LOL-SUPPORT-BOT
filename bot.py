@@ -8,6 +8,7 @@ import re
 import traceback
 import random
 import html
+import datetime
 from datetime import time, timezone, timedelta  # 시간 설정을 위해 추가
 
 # [로그 설정]
@@ -56,7 +57,6 @@ async def fetch_and_post_news():
                 if response.status == 200:
                     raw_html = await response.text()
                     
-                    # 1. 롤 홈페이지의 핵심 데이터가 담긴 JSON 스크립트 추출
                     match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', raw_html)
                     if not match:
                         log("데이터를 찾을 수 없습니다. (페이지 구조 변경 의심)")
@@ -64,9 +64,6 @@ async def fetch_and_post_news():
                     
                     try:
                         next_data = json.loads(match.group(1))
-                        
-                        # 2. JSON 구조 안에서 뉴스 기사 목록(items) 찾기
-                        # 보통 세 번째(인덱스 2) blade에 기사 목록(articleCardGrid)이 들어있습니다.
                         blades = next_data.get('props', {}).get('pageProps', {}).get('page', {}).get('blades',[])
                         
                         articles_data =[]
@@ -80,42 +77,52 @@ async def fetch_and_post_news():
                         if not articles_data:
                             return
 
-                        # 상위 10개만 가져오고 역순(과거 -> 최신) 정렬
                         target_articles = articles_data[:10]
                         target_articles.reverse()
                         
-                        # 이미 포스팅된 링크 수집
                         already_posted_links =[]
                         async for msg in channel.history(limit=100):
                             if msg.author == bot.user and msg.embeds:
                                 already_posted_links.append(msg.embeds[0].url)
                                 
-                        # 3. 데이터 파싱 및 전송
                         for article in target_articles:
-                            # 제목
                             title = article.get('title', '새로운 소식')
                             
-                            # 설명 (html 태그가 섞여 있을 수 있으므로 정제)
                             raw_desc = article.get('description', {}).get('body', '클릭하여 자세한 내용을 확인하세요.')
                             description = re.sub(r'<[^>]+>', '', raw_desc).strip()
                             
-                            # 링크 (내부 링크면 도메인 붙여주기)
                             link_url = article.get('action', {}).get('payload', {}).get('url', '')
-                            if not link_url:
-                                continue
+                            if not link_url: continue
                                 
                             if not link_url.startswith('http'):
                                 link_url = "https://www.leagueoflegends.com" + link_url
                                 
-                            if link_url in already_posted_links:
-                                continue
+                            if link_url in already_posted_links: continue
                                 
-                            # ★ 핵심: 이미지 URL 직접 추출 (오류 발생 0%)
                             image_url = article.get('media', {}).get('url', '')
                             if image_url:
                                 image_url = html.unescape(image_url).strip()
                                 
-                            # 임베드 생성
+                            # --- [★ 추가된 날짜 포맷 변환 로직] ---
+                            published_at = article.get('publishedAt', '')
+                            date_text = "새 소식" # 기본값
+                            
+                            if published_at:
+                                try:
+                                    # 라이엇 데이터는 "Z(UTC 시간)"로 끝납니다. 
+                                    # Python이 계산할 수 있도록 +00:00으로 바꿔주고 날짜 객체로 만듭니다.
+                                    dt = datetime.datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+                                    
+                                    # 한국 시간(KST)은 UTC보다 9시간 빠르므로 더해줍니다.
+                                    korea_tz = datetime.timezone(datetime.timedelta(hours=9))
+                                    dt_korea = dt.astimezone(korea_tz)
+                                    
+                                    # 예쁘게 문자열로 포장! (예: 2026년 03월 24일 15:30)
+                                    date_text = dt_korea.strftime("%Y년 %m월 %d일 %H:%M")
+                                except Exception as date_error:
+                                    log(f"날짜 변환 에러: {date_error}")
+                            # -----------------------------------
+                                
                             embed = discord.Embed(
                                 title=title,
                                 url=link_url,
@@ -125,11 +132,9 @@ async def fetch_and_post_news():
                             
                             if image_url and image_url.startswith('http'):
                                 embed.set_image(url=image_url)
-                                log(f"이미지 추출 성공: {title} -> {image_url[:50]}...")
-                            else:
-                                log(f"이미지 추출 실패(데이터 없음): {title}")
                             
-                            embed.set_footer(text="새 소식")
+                            # ★ 수정된 푸터 (기존 text="새 소식"에서 date_text 변수로 교체)
+                            embed.set_footer(text=f"작성일: {date_text}")
 
                             try:
                                 await channel.send(embed=embed)
