@@ -187,8 +187,8 @@ async def daily_vote_loop():
         poll.add_answer(text="TOP", emoji="🛡️")
         poll.add_answer(text="JGL", emoji="⚔️")
         poll.add_answer(text="MID", emoji="🔥")
-        poll.add_answer(text="ADC", emoji="🏹")
         poll.add_answer(text="SUP", emoji="✨")
+        poll.add_answer(text="ADC", emoji="🏹")
         poll.add_answer(text="미정", emoji="❓")
         poll.add_answer(text="불참", emoji="❌")
 
