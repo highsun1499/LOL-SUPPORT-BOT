@@ -151,7 +151,7 @@ async def fetch_and_post_news():
                     title=title,
                     url=link_url,
                     description=description,
-                    color=00000000
+                    color=ffffff
                 )
                 
                 if image_url and image_url.startswith('http'):
