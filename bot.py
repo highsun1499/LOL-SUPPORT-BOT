@@ -156,7 +156,7 @@ async def fetch_and_post_youtube():
     except Exception as e: log(f"유튜브 에러: {e}")
 
 # ================= [ 자동 루프 & 이벤트 ] =================
-@tasks.loop(minutes=30)
+@tasks.loop(minutes=60)
 async def main_loop():
     await fetch_and_post_news()
     await fetch_and_post_youtube()
